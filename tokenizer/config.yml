@@ -1,0 +1,62 @@
+---
+# TOKENIZER DESCRIPTION:
+# This tokenizer is part of a series of 5 tokenizers for the "alpha experiment".
+# The idea is to measure whether it is better to follow the model training data distribution (alpha = 1) or a more uniform distribution (down to alpha = 0) for the tokenizer training.
+# Most design choices are detailed here: https://docs.google.com/document/d/1HW5DYDpBMhcCFGwPnuxtBokjuY87nizkwN8HbBlGp24/edit#heading=h.xabjxqjtx1ac
+# UPDATE of 2024-04-09: changed proportions of datasets because of corrected deduplication.
+
+
+# 1- REQUIRED ARGUMENTS
+vocab_size : 256000  # Tokenizer vocabulary size.
+
+model_type : bpe  # Tokenizer type to be trained. Options are: bpe (Only one tested), unigram, char and word.
+
+# choose one, comment the other.
+input : data/training_multilingual/alpha_experiment_2024-04-09/alpha_0/output.txt  # Text file to use as training data. 
+# sentence_iterator : HERE  # TODO: NOT IMPLEMENTED
+
+
+# 2- OPTIONAL ARGUMENTS
+user_defined_symbols :  # List of special tokens to manually add. 
+  - \r
+
+control_symbols :  # Similar to "user_defined_symbols" the only difference being the fact that this tokens are skipped during tokenization. They can be "activated later".
+    # More info about the difference between "user_defined_symbols" and "control_symbols" can be found here: 
+    # https://github.com/google/sentencepiece/blob/2b8772ae8f4efce787c94fbb38310a07b4222455/doc/special_symbols.md
+  - <|im_start|>
+  - <|im_end|>
+
+allow_whitespace_only_pieces : True  # Whether to allow tokens that are sequences of whitespaces in the vocabulary. CAREFUL: this only allows them, they need to be added.
+
+max_sentence_length : 35145728  # DO NOT CHANGE UNLESS YOU KNOW WHAT YOU ARE DOING (I DO NOT)! Maximum bytes allowed per data line.
+
+byte_fallback : True  # Whether to add bytes to the vocabulary. This ensures that any sequence can be tokenized.
+
+split_digits : True  # Whether to separate single digits from other characters. 
+    # For example, if this is set to True, the following sequences would never be added to the vocabulary as single tokens: "day23", "2-headed", "2023"...
+
+remove_extra_whitespaces : False  # Normalise the text so that all sequence of whitespaces is replaced by a single whitespace.
+
+normalization_rule_tsv : ./normalization_tsvs/nfc.tsv  # tsv file defining the normalization rule to be used by the tokenizer.
+
+pad_id : 3  # Position of pad token. -1 means no pad token.
+
+# 2.1- custom arguments (used to set up other arguments in spm)
+whitespaces_sequences : 24  # Integer value. Sequences of whitespaces up to this integer length will be added as "user_defined_symbols".
+
+tabulations_sequences : 6  # Integer value. Sequences of tabulations up to this integer length will be added as "user_defined_symbols".
+
+newlines_sequences : 3  # Integer value. Sequences of newlines up to this integer length will be added as "user_defined_symbols".
+
+n_reserved_tokens : 98  # The number of reserved tokens to be added length will be added as "control_symbols". 
+    # They can be added as "user_defined_symbols" with "reserved_tokens_as_user_defined_symbols".
+
+reserved_tokens_format : <|reserved_token_{{REPLACE}}|>  # Naming convention that will be used for the reserved tokens. 
+    # Something like "<|reserved_token_{{REPLACE}}|>" where "{{REPLACE}}" will be replaced by the reserved token number.
+
+reserved_tokens_as_user_defined_symbols : False  # Whether to set reserved tokens as "user_defined_symbols" instead of "control_symbols".
+
+
+# MORE INFO
+# You can check these and other parameters supported by SentencePiece here: https://github.com/google/sentencepiece/blob/022f8c3fed4d2feb4e4c670949cf01cef477dcc4/doc/options.md
+# You can add any of them to the list and they should be correctly handled.
