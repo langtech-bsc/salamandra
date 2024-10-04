@@ -16,5 +16,5 @@
 
 This repository contains the scripts and configuration files used to pre-train the Salamandra family of language models.
 
-For a detailed description of the models, refer to the [official model cards](https://huggingface.co/collections/projecte-aina/salamandra-66faab60a9312392f2e02309).
+For a detailed description of the models, refer to the [official model cards](https://huggingface.co/collections/BSC-LT/salamandra-66fc171485944df79469043a).
 
