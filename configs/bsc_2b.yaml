@@ -1,0 +1,677 @@
+hydra:
+  searchpath:
+  - file:///opt/NeMo/examples/nlp/language_modeling/conf
+
+run:
+  name: bsc_2b
+  results_dir: /results
+  time_limit: "90:00:00:00"
+  dependency: singleton
+
+trainer:
+  num_nodes: 64
+  devices: 4
+  accelerator: gpu
+  precision: bf16
+  logger: false # logger provided by exp_manager
+  enable_checkpointing: false
+  use_distributed_sampler: false
+  max_time: "89:00:00:00" # should be lower than run.time_limit
+  log_every_n_steps: 1
+  limit_val_batches: 32
+  limit_test_batches: 32
+  gradient_clip_val: 1.0
+  val_check_interval: 5000
+  max_epochs: null
+  max_steps: 3016817 # max_steps = (total_tokens/seq_length)/GBS
+  accumulate_grad_batches: 1 # grad acc is automatic for training megatron models
+
+exp_manager:
+  seconds_to_sleep: 60
+  name: ${run.name} # The name of the experiment
+  exp_dir: null # The base directory to create the logging directory. Defaults to None, which logs to ./nemo_experiments.
+  explicit_log_dir: ${run.results_dir} # Can be used to override exp_dir/name/version folder creation.
+  log_global_rank_0_only: true # Reduces amount of log files in exp_dir. Cannot be used with log_local_rank_0_only
+  log_local_rank_0_only: false # Reduces amount of log files in exp_dir. Cannot be used with log_global_rank_0_only
+  create_tensorboard_logger: true
+  create_wandb_logger: true
+  wandb_logger_kwargs:
+    project: ${run.name}
+    name: 2b_${model.encoder_seq_length}_${trainer.num_nodes}nodes
+  create_neptune_logger: false
+  neptune_logger_kwargs:
+    project: null
+    name: null
+    prefix: train
+    log_model_checkpoints: false
+    tags: null
+    description: null
+  resume_if_exists: true # whether this experiment is resuming from a previous run
+  resume_past_end: false # exp_manager errors out if resume_if_exists is True and there's a *end.ckpt checkpoint
+  resume_ignore_no_checkpoint: false # exp_manager errors out if resume_if_exists is True and no checkpoint could be found
+  create_checkpoint_callback: true # whether to create a ModelCheckpoint callback and attach it to the pytorch lightning trainer
+  checkpoint_callback_params:
+    monitor: val_loss
+    save_top_k: 200
+    mode: min
+    always_save_nemo: false # saves nemo file during validation, not implemented for model parallel
+    save_nemo_on_train_end: true # save compressed nemo file when training is completed
+    filename: megatron_gpt2b--{val_loss:.2f}-{step}-{consumed_samples}
+    model_parallel_size: ${multiply:${model.tensor_model_parallel_size}, ${model.pipeline_model_parallel_size}}
+    every_n_epochs: null
+    every_n_train_steps: ${trainer.val_check_interval}
+  log_step_timing: true
+  step_timing_kwargs:
+    sync_cuda: true
+    buffer_size: 5
+
+model:
+  ## PARALLELISM
+  micro_batch_size: 1 # limited by VRAM
+  global_batch_size: 512 # will use more micro batches to reach global batch size
+  rampup_batch_size: null # [<start_batch_size>, <batch_size_increment>, <rampup_samples>]
+  context_parallel_size: 1
+  tensor_model_parallel_size: 1 # intra-layer model parallelism
+  pipeline_model_parallel_size: 1 # inter-layer model parallelism
+  virtual_pipeline_model_parallel_size: null # interleaved pipeline
+  sequence_parallel: false # Makes TP more memory efficient for LLMs (20B+) by parallelizing layer norms and dropout sequentially
+
+  ## ARCHITECTURE
+  use_flash_attention: true # this config does nothing when transformer_engine=True
+  encoder_seq_length: 8192
+  max_position_embeddings: 8192
+  num_layers: 24
+  hidden_size: 2048
+  ffn_hidden_size: 5440
+  num_attention_heads: 16
+  init_method_std: 0.014
+  use_scaled_init_method: true
+  hidden_dropout: 0.0
+  attention_dropout: 0.0
+  ffn_dropout: 0.0
+  kv_channels: null
+  apply_query_key_layer_scaling: true
+  normalization: rmsnorm
+  layernorm_zero_centered_gamma: true
+  layernorm_epsilon: 1.0e-05
+  do_layer_norm_weight_decay: false
+  make_vocab_size_divisible_by: 128
+  pre_process: true # add embedding
+  post_process: true # add pooler
+  persist_layer_norm: true
+  bias: false
+  activation: fast-swiglu
+  headscale: false
+  transformer_block_type: pre_ln
+  openai_gelu: false
+  normalize_attention_scores: true
+  position_embedding_type: rope
+  rotary_percentage: 1.0
+  rotary_base: 10000
+  attention_type: multihead
+  num_query_groups: null
+  share_embeddings_and_output_weights: false
+  overlap_p2p_comm: false
+  batch_p2p_comm: true
+
+  ## MEGATRON O2-STYLE HALF-PRECISION
+  megatron_amp_O2: true # Enable O2-level automatic mixed precision using main parameters
+  grad_allreduce_chunk_size_mb: 125
+
+  # MISCELLANEOUS
+  seed: 1234
+  resume_from_checkpoint: null # Manually set the checkpoint file to load from
+  use_cpu_initialization: false # Init weights on the CPU (slow for large models)
+  onnx_safe: false # Use work-arounds for known problems with Torch ONNX exporter
+  apex_transformer_log_level: 30 # Python logging level displays logs with severity greater than or equal to this
+  gradient_as_bucket_view: true # PyTorch DDP argument. Allocate gradients in a contiguous bucket to save memory (less fragmentation and buffer memory)
+  sync_batch_comm: false # Enable stream synchronization after each p2p communication between pipeline stages
+  nccl_communicator_config_path: null # Path to the yaml file with NCCL communicator options (min_ctas, max_ctas, and cga_cluster_size)
+
+  ## ACTIVATION CHECKPOINTING
+  activations_checkpoint_granularity: selective
+  activations_checkpoint_method: uniform
+  activations_checkpoint_num_layers: null
+  num_micro_batches_with_partial_activation_checkpoints: null
+  activations_checkpoint_layers_per_pipeline: null
+
+  ## MEGATRON CORE
+  mcore_gpt: true # use GPTModel from megatron.core
+
+  ## NETWORK
+  sharp: false # Enable the use of SHARP (if supported) for NCCL data-parallel communications.
+
+  ## MIXED PRECISION
+  native_amp_init_scale: 4294967296 # 2**32
+  native_amp_growth_interval: 1000
+  hysteresis: 2 # Gradient scale hysteresis
+  fp32_residual_connection: false # Move residual connections to fp32
+  fp16_lm_cross_entropy: false # Move the cross entropy unreduced loss calculation for lm head to fp16
+
+  ## FUSION
+  grad_div_ar_fusion: true # Fuse grad division into torch.distributed.all_reduce. Only used with O2 and no PP.
+  gradient_accumulation_fusion: false # Fuse weight gradient accumulation to GEMMs. Only used with O2 and PP.
+  bias_activation_fusion: false # Use a kernel that fuses the bias addition from weight matrices with the subsequent activation function.
+  bias_dropout_add_fusion: false # Use a kernel that fuses the bias addition, dropout and residual connection addition.
+  masked_softmax_fusion: true # Use a kernel that fuses the attention softmax with it's mask.
+  apply_rope_fusion: true # Use a kernel to add rotary positional embeddings.
+  # get_attention_mask_from_fusion: true # When using fused softmax it will create the attention mask so we won't copy it to the pipeline stages.
+
+  ## TRANSFORMER ENGINE (FP8 TRAINING)
+  transformer_engine: false # set to true for FP8 training
+  fp8: false # set to true for FP8 training
+  fp8_e4m3: false # sets fp8_format = recipe.Format.E4M3
+  fp8_hybrid: true # sets fp8_format = recipe.Format.HYBRID
+  fp8_margin: 0 # scaling margin
+  fp8_interval: 1 # scaling update interval
+  fp8_amax_history_len: 1024 # Number of steps for which amax history is recorded per tensor
+  fp8_amax_compute_algo: max # 'most_recent' or 'max'. Algorithm for computing amax from history
+  reduce_amax: true # Perform reduction to sync amax tensors across GPUs after every iteration
+  use_emha: false # Use fused multi-head attention for large sequence-length. Set to False because it is not supported yet.
+  ub_tp_comm_overlap: false # Use userbuffer backend to overlap TP communications with computes. This feature is only available with TE and squence parallelism enabled.
+  ub_tp_comm_overlap_cfg: null # A yaml file with userbuffer communicator configurations. If the configuration file is not provided a default setting is used for all communicators.
+
+  ## TOKENIZER
+  tokenizer:
+    library: sentencepiece
+    type: /tokenizer
+    model: /tokenizer/salamandra.model
+    vocab_file: /tokenizer/salamandra.vocab
+    merge_file: null
+    delimiter: null
+    sentencepiece_legacy: false
+    eod: 2
+
+  ## OPTIMIZER
+  optim:
+    name: distributed_fused_adam
+    lr: 2.0e-04
+    weight_decay: 0.1
+    betas: [0.9,0.95]
+    sched:
+      name: CosineAnnealing
+      warmup_steps: 2000
+      constant_steps: 0
+      min_lr: 2.0e-05
+    grad_sync_dtype: bf16
+    overlap_grad_sync: true
+    overlap_param_sync: true
+    contiguous_grad_buffer: true
+    contiguous_param_buffer: true
+    bucket_cap_mb: 125
+
+  ## TRAINING DATA
+  data:
+    data_impl: mmap
+    num_workers: 0
+    pin_memory: true
+    skip_warmup: true
+    eod_mask_loss: false
+    dataloader_type: single
+    reset_position_ids: false
+    reset_attention_mask: true
+    splits_string: "98,1,1"
+    seq_length: ${model.encoder_seq_length}
+    exchange_indices_distributed: true # Set to True to exchange indices via torch.distributed instead of filesystem
+    shuffle_documents: true # Set to False to disable documents shuffling. Sample index will still be shuffled
+    index_mapping_dir: null # path to save index mapping .npy files, by default will save in the same location as data_prefix
+    data_prefix:
+      train:
+        - 0.0043014577132350715
+        - /data/train/fi/fi-train-optimized-0_text_document
+        - 0.003913075031108444
+        - /data/train/no/no-train-optimized-0_text_document
+        - 5.54756800026617e-05
+        - /data/train/sh/sh-train-optimized-0_text_document
+        - 0.004687674376358669
+        - /data/train/sk/sk-train-optimized-0_text_document
+        - 0.002092800470665043
+        - /data/train/sk/sk-train-optimized-1_text_document
+        - 0.005114769802922146
+        - /data/train/sv/sv-train-optimized-0_text_document
+        - 0.005371812119866443
+        - /data/train/pl/pl-train-optimized-1_text_document
+        - 0.0008494351409857248
+        - /data/train/pl/pl-train-optimized-2_text_document
+        - 0.00539080597644909
+        - /data/train/pl/pl-train-optimized-0_text_document
+        - 0.00104080322630716
+        - /data/train/pt/pt-train-optimized-4_text_document
+        - 0.00561327619460865
+        - /data/train/pt/pt-train-optimized-2_text_document
+        - 0.005609468687311935
+        - /data/train/pt/pt-train-optimized-1_text_document
+        - 0.005599543401317848
+        - /data/train/pt/pt-train-optimized-3_text_document
+        - 0.005593802059907877
+        - /data/train/pt/pt-train-optimized-0_text_document
+        - 0.001484702869140242
+        - /data/train/el/el-train-optimized-5_text_document
+        - 0.0014894363160394039
+        - /data/train/el/el-train-optimized-4_text_document
+        - 0.0014853580585834445
+        - /data/train/el/el-train-optimized-1_text_document
+        - 0.0014863016307799111
+        - /data/train/el/el-train-optimized-6_text_document
+        - 0.00148848396465329
+        - /data/train/el/el-train-optimized-3_text_document
+        - 0.0008964928842958346
+        - /data/train/el/el-train-optimized-7_text_document
+        - 0.0014827951936559798
+        - /data/train/el/el-train-optimized-0_text_document
+        - 0.0014836194566115407
+        - /data/train/el/el-train-optimized-2_text_document
+        - 0.0015223740598024286
+        - /data/train/bg/bg-train-optimized-2_text_document
+        - 0.0008857746712768477
+        - /data/train/bg/bg-train-optimized-4_text_document
+        - 0.00152665877891222
+        - /data/train/bg/bg-train-optimized-3_text_document
+        - 0.0015122068453498013
+        - /data/train/bg/bg-train-optimized-0_text_document
+        - 0.0015204058292257185
+        - /data/train/bg/bg-train-optimized-1_text_document
+        - 0.0023558812179844102
+        - /data/train/et/et-train-optimized-0_text_document
+        - 0.004237927075193057
+        - /data/train/code/code-train-optimized-5_text_document
+        - 0.004236216242309678
+        - /data/train/code/code-train-optimized-11_text_document
+        - 0.004234137199459602
+        - /data/train/code/code-train-optimized-13_text_document
+        - 0.000344729686924442
+        - /data/train/code/code-train-optimized-15_text_document
+        - 0.004233537370284259
+        - /data/train/code/code-train-optimized-12_text_document
+        - 0.004235703329090902
+        - /data/train/code/code-train-optimized-3_text_document
+        - 0.004238839174367774
+        - /data/train/code/code-train-optimized-10_text_document
+        - 0.004231226672355085
+        - /data/train/code/code-train-optimized-0_text_document
+        - 0.004238579953878341
+        - /data/train/code/code-train-optimized-4_text_document
+        - 0.004240419004861891
+        - /data/train/code/code-train-optimized-7_text_document
+        - 0.004241451510212376
+        - /data/train/code/code-train-optimized-14_text_document
+        - 0.004235533634236374
+        - /data/train/code/code-train-optimized-6_text_document
+        - 0.004235175228240986
+        - /data/train/code/code-train-optimized-2_text_document
+        - 0.004236160974191768
+        - /data/train/code/code-train-optimized-9_text_document
+        - 0.004231908408817675
+        - /data/train/code/code-train-optimized-1_text_document
+        - 0.004236074168938832
+        - /data/train/code/code-train-optimized-8_text_document
+        - 0.003658836676345233
+        - /data/train/da/da-train-optimized-0_text_document
+        - 0.0017910945423888686
+        - /data/train/lt/lt-train-optimized-0_text_document
+        - 2.515602516848033e-05
+        - /data/train/nn/nn-train-optimized-0_text_document
+        - 0.006538558971177918
+        - /data/train/ca/ca-train-optimized-1_text_document
+        - 0.0119731249967452
+        - /data/train/ca/ca-train-optimized-0_text_document
+        - 0.0062101417240702506
+        - /data/train/nl/nl-train-optimized-0_text_document
+        - 0.005451461679737871
+        - /data/train/nl/nl-train-optimized-1_text_document
+        - 0.003199580175895846
+        - /data/train/sr/sr-train-optimized-0_text_document
+        - 5.980503638332992e-05
+        - /data/train/sr/sr-train-optimized-1_text_document
+        - 7.147422987754074e-05
+        - /data/train/cy/cy-train-optimized-0_text_document
+        - 0.0028486244140859913
+        - /data/train/hr/hr-train-optimized-0_text_document
+        - 0.003579172243842942
+        - /data/train/hu/hu-train-optimized-10_text_document
+        - 0.0035839172661776626
+        - /data/train/hu/hu-train-optimized-3_text_document
+        - 0.0035851376304365857
+        - /data/train/hu/hu-train-optimized-9_text_document
+        - 0.003582477553702543
+        - /data/train/hu/hu-train-optimized-5_text_document
+        - 0.0035854149139654423
+        - /data/train/hu/hu-train-optimized-2_text_document
+        - 0.003584667258335013
+        - /data/train/hu/hu-train-optimized-7_text_document
+        - 0.003582765459420048
+        - /data/train/hu/hu-train-optimized-1_text_document
+        - 0.003582570771107707
+        - /data/train/hu/hu-train-optimized-4_text_document
+        - 0.0035853894311027486
+        - /data/train/hu/hu-train-optimized-8_text_document
+        - 0.003517634896422553
+        - /data/train/hu/hu-train-optimized-0_text_document
+        - 0.00014793455295596564
+        - /data/train/hu/hu-train-optimized-11_text_document
+        - 0.0035838088112525725
+        - /data/train/hu/hu-train-optimized-6_text_document
+        - 0.011670202413709434
+        - /data/train/es/es-train-optimized-13_text_document
+        - 0.011688501583772307
+        - /data/train/es/es-train-optimized-6_text_document
+        - 0.011685837938959215
+        - /data/train/es/es-train-optimized-8_text_document
+        - 0.002841696229971406
+        - /data/train/es/es-train-optimized-14_text_document
+        - 0.011672525866469836
+        - /data/train/es/es-train-optimized-5_text_document
+        - 0.011690607332584972
+        - /data/train/es/es-train-optimized-7_text_document
+        - 0.011667480518583405
+        - /data/train/es/es-train-optimized-11_text_document
+        - 0.011680378477855698
+        - /data/train/es/es-train-optimized-2_text_document
+        - 0.011691599910001177
+        - /data/train/es/es-train-optimized-9_text_document
+        - 0.011691340188150047
+        - /data/train/es/es-train-optimized-1_text_document
+        - 0.011686303811174636
+        - /data/train/es/es-train-optimized-10_text_document
+        - 0.011695546613611236
+        - /data/train/es/es-train-optimized-4_text_document
+        - 0.011685912971695267
+        - /data/train/es/es-train-optimized-3_text_document
+        - 0.011690202981902638
+        - /data/train/es/es-train-optimized-12_text_document
+        - 0.011649561971930721
+        - /data/train/es/es-train-optimized-0_text_document
+        - 0.0011996286289258722
+        - /data/train/ro/ro-train-optimized-1_text_document
+        - 0.0055387978590431
+        - /data/train/ro/ro-train-optimized-0_text_document
+        - 0.006273650228601334
+        - /data/train/en/en-train-optimized-43_text_document
+        - 0.006277565970240484
+        - /data/train/en/en-train-optimized-21_text_document
+        - 0.006274395212501668
+        - /data/train/en/en-train-optimized-33_text_document
+        - 0.006280897774344557
+        - /data/train/en/en-train-optimized-7_text_document
+        - 0.00627913400286102
+        - /data/train/en/en-train-optimized-2_text_document
+        - 0.006277882037559947
+        - /data/train/en/en-train-optimized-57_text_document
+        - 0.006279629514788336
+        - /data/train/en/en-train-optimized-29_text_document
+        - 0.0062798115012505165
+        - /data/train/en/en-train-optimized-26_text_document
+        - 0.00628063952606802
+        - /data/train/en/en-train-optimized-44_text_document
+        - 0.006280698824457793
+        - /data/train/en/en-train-optimized-35_text_document
+        - 0.0062770184490462885
+        - /data/train/en/en-train-optimized-6_text_document
+        - 0.0062763685865711155
+        - /data/train/en/en-train-optimized-8_text_document
+        - 0.006274210344446643
+        - /data/train/en/en-train-optimized-4_text_document
+        - 0.006274578473395596
+        - /data/train/en/en-train-optimized-59_text_document
+        - 0.006268618411708462
+        - /data/train/en/en-train-optimized-12_text_document
+        - 0.006279092732052524
+        - /data/train/en/en-train-optimized-56_text_document
+        - 0.006272433826996414
+        - /data/train/en/en-train-optimized-31_text_document
+        - 0.0062776029217519935
+        - /data/train/en/en-train-optimized-52_text_document
+        - 0.0062760598681586306
+        - /data/train/en/en-train-optimized-1_text_document
+        - 0.0062759194427669815
+        - /data/train/en/en-train-optimized-18_text_document
+        - 0.0062773998921168825
+        - /data/train/en/en-train-optimized-46_text_document
+        - 0.006276213561081565
+        - /data/train/en/en-train-optimized-47_text_document
+        - 0.003340760297900291
+        - /data/train/en/en-train-optimized-62_text_document
+        - 0.006280365407797178
+        - /data/train/en/en-train-optimized-55_text_document
+        - 0.006279042780182739
+        - /data/train/en/en-train-optimized-49_text_document
+        - 0.006278945795143376
+        - /data/train/en/en-train-optimized-32_text_document
+        - 0.00627704820420331
+        - /data/train/en/en-train-optimized-25_text_document
+        - 0.006282454571268053
+        - /data/train/en/en-train-optimized-28_text_document
+        - 0.0062765863511275435
+        - /data/train/en/en-train-optimized-30_text_document
+        - 0.006278521347113548
+        - /data/train/en/en-train-optimized-11_text_document
+        - 0.006279461356178614
+        - /data/train/en/en-train-optimized-17_text_document
+        - 0.006273290620739707
+        - /data/train/en/en-train-optimized-20_text_document
+        - 0.006276628212767711
+        - /data/train/en/en-train-optimized-5_text_document
+        - 0.006275478747896969
+        - /data/train/en/en-train-optimized-58_text_document
+        - 0.0062810246856471125
+        - /data/train/en/en-train-optimized-54_text_document
+        - 0.006278440081165216
+        - /data/train/en/en-train-optimized-41_text_document
+        - 0.006279864984504293
+        - /data/train/en/en-train-optimized-9_text_document
+        - 0.006274612793995109
+        - /data/train/en/en-train-optimized-23_text_document
+        - 0.006281313536777752
+        - /data/train/en/en-train-optimized-3_text_document
+        - 0.006281418192733537
+        - /data/train/en/en-train-optimized-38_text_document
+        - 0.006279092096279714
+        - /data/train/en/en-train-optimized-50_text_document
+        - 0.006263423851406958
+        - /data/train/en/en-train-optimized-0_text_document
+        - 0.006280014008908729
+        - /data/train/en/en-train-optimized-40_text_document
+        - 0.00627494328618326
+        - /data/train/en/en-train-optimized-15_text_document
+        - 0.006281585031145765
+        - /data/train/en/en-train-optimized-19_text_document
+        - 0.006276076907034851
+        - /data/train/en/en-train-optimized-60_text_document
+        - 0.006276031473604898
+        - /data/train/en/en-train-optimized-45_text_document
+        - 0.006272187451838943
+        - /data/train/en/en-train-optimized-37_text_document
+        - 0.006279940578386126
+        - /data/train/en/en-train-optimized-13_text_document
+        - 0.0062771697802917565
+        - /data/train/en/en-train-optimized-16_text_document
+        - 0.006283323963785499
+        - /data/train/en/en-train-optimized-14_text_document
+        - 0.006277710714516817
+        - /data/train/en/en-train-optimized-22_text_document
+        - 0.0062775932701270255
+        - /data/train/en/en-train-optimized-24_text_document
+        - 0.006282001974005388
+        - /data/train/en/en-train-optimized-53_text_document
+        - 0.006276687612996579
+        - /data/train/en/en-train-optimized-34_text_document
+        - 0.006277077566434594
+        - /data/train/en/en-train-optimized-39_text_document
+        - 0.006278801993806354
+        - /data/train/en/en-train-optimized-61_text_document
+        - 0.006278843077016517
+        - /data/train/en/en-train-optimized-10_text_document
+        - 0.0062770038472991715
+        - /data/train/en/en-train-optimized-42_text_document
+        - 0.006275144186268072
+        - /data/train/en/en-train-optimized-48_text_document
+        - 0.00627282158945083
+        - /data/train/en/en-train-optimized-36_text_document
+        - 0.006268729526819134
+        - /data/train/en/en-train-optimized-27_text_document
+        - 0.006279422059069495
+        - /data/train/en/en-train-optimized-51_text_document
+        - 0.0009551328834976268
+        - /data/train/mt/mt-train-optimized-0_text_document
+        - 0.0013739575560108997
+        - /data/train/ru/ru-train-optimized-31_text_document
+        - 0.001375785064337061
+        - /data/train/ru/ru-train-optimized-11_text_document
+        - 0.0013734663303962486
+        - /data/train/ru/ru-train-optimized-23_text_document
+        - 0.001373349905222012
+        - /data/train/ru/ru-train-optimized-12_text_document
+        - 0.0013749829631352563
+        - /data/train/ru/ru-train-optimized-10_text_document
+        - 0.001374056474343845
+        - /data/train/ru/ru-train-optimized-6_text_document
+        - 0.0013732039862915067
+        - /data/train/ru/ru-train-optimized-28_text_document
+        - 0.0013745795900257697
+        - /data/train/ru/ru-train-optimized-8_text_document
+        - 0.001374969329890299
+        - /data/train/ru/ru-train-optimized-37_text_document
+        - 0.0013745209645161683
+        - /data/train/ru/ru-train-optimized-20_text_document
+        - 0.0013740449896151726
+        - /data/train/ru/ru-train-optimized-3_text_document
+        - 0.001374567217606527
+        - /data/train/ru/ru-train-optimized-4_text_document
+        - 0.0013742439267205118
+        - /data/train/ru/ru-train-optimized-13_text_document
+        - 0.0013752168376469326
+        - /data/train/ru/ru-train-optimized-30_text_document
+        - 0.0013749031056174796
+        - /data/train/ru/ru-train-optimized-21_text_document
+        - 0.0013729474911316922
+        - /data/train/ru/ru-train-optimized-2_text_document
+        - 0.0013751804052261935
+        - /data/train/ru/ru-train-optimized-1_text_document
+        - 0.001372706721659772
+        - /data/train/ru/ru-train-optimized-7_text_document
+        - 0.0013729912514319036
+        - /data/train/ru/ru-train-optimized-16_text_document
+        - 0.0013736521987008435
+        - /data/train/ru/ru-train-optimized-24_text_document
+        - 0.0013741237693702226
+        - /data/train/ru/ru-train-optimized-36_text_document
+        - 0.0004120909495315092
+        - /data/train/ru/ru-train-optimized-39_text_document
+        - 0.0013746195274430425
+        - /data/train/ru/ru-train-optimized-15_text_document
+        - 0.0013743405930488617
+        - /data/train/ru/ru-train-optimized-29_text_document
+        - 0.0013746325632594647
+        - /data/train/ru/ru-train-optimized-25_text_document
+        - 0.0013749681626575984
+        - /data/train/ru/ru-train-optimized-33_text_document
+        - 0.0013739762667799495
+        - /data/train/ru/ru-train-optimized-27_text_document
+        - 0.0013749409695578006
+        - /data/train/ru/ru-train-optimized-26_text_document
+        - 0.0013740633375566788
+        - /data/train/ru/ru-train-optimized-34_text_document
+        - 0.001374221085077415
+        - /data/train/ru/ru-train-optimized-5_text_document
+        - 0.0013750472029887934
+        - /data/train/ru/ru-train-optimized-9_text_document
+        - 0.0013755612846771822
+        - /data/train/ru/ru-train-optimized-18_text_document
+        - 0.0013749199136034451
+        - /data/train/ru/ru-train-optimized-22_text_document
+        - 0.0013591137171632018
+        - /data/train/ru/ru-train-optimized-0_text_document
+        - 0.0013740613774633344
+        - /data/train/ru/ru-train-optimized-19_text_document
+        - 0.0013745937007187902
+        - /data/train/ru/ru-train-optimized-35_text_document
+        - 0.0013747234251717223
+        - /data/train/ru/ru-train-optimized-17_text_document
+        - 0.0013749478999761909
+        - /data/train/ru/ru-train-optimized-14_text_document
+        - 0.0013738082780394864
+        - /data/train/ru/ru-train-optimized-32_text_document
+        - 0.0013750227129541968
+        - /data/train/ru/ru-train-optimized-38_text_document
+        - 3.595311483396352e-05
+        - /data/train/oc/oc-train-optimized-0_text_document
+        - 0.0011710271018702213
+        - /data/train/lv/lv-train-optimized-0_text_document
+        - 0.006089617369597507
+        - /data/train/it/it-train-optimized-0_text_document
+        - 0.0012142711087943763
+        - /data/train/it/it-train-optimized-3_text_document
+        - 0.0060997503995109505
+        - /data/train/it/it-train-optimized-2_text_document
+        - 0.006096699866740283
+        - /data/train/it/it-train-optimized-1_text_document
+        - 0.007355116770115968
+        - /data/train/fr/fr-train-optimized-2_text_document
+        - 0.007370805239325857
+        - /data/train/fr/fr-train-optimized-1_text_document
+        - 0.007356258240411626
+        - /data/train/fr/fr-train-optimized-5_text_document
+        - 0.00737185831246273
+        - /data/train/fr/fr-train-optimized-6_text_document
+        - 0.007347383098958908
+        - /data/train/fr/fr-train-optimized-7_text_document
+        - 0.007366244460405561
+        - /data/train/fr/fr-train-optimized-4_text_document
+        - 0.0046694976152383775
+        - /data/train/fr/fr-train-optimized-8_text_document
+        - 0.007336413638585762
+        - /data/train/fr/fr-train-optimized-0_text_document
+        - 0.007343523739895452
+        - /data/train/fr/fr-train-optimized-3_text_document
+        - 0.003858195003022876
+        - /data/train/sl/sl-train-optimized-0_text_document
+        - 0.004583764033649485
+        - /data/train/cs/cs-train-optimized-0_text_document
+        - 0.0045809435508583395
+        - /data/train/cs/cs-train-optimized-1_text_document
+        - 0.0007423669060725828
+        - /data/train/cs/cs-train-optimized-2_text_document
+        - 0.0014124974271414775
+        - /data/train/uk/uk-train-optimized-0_text_document
+        - 0.0014201444526072602
+        - /data/train/uk/uk-train-optimized-4_text_document
+        - 0.0014198113550699624
+        - /data/train/uk/uk-train-optimized-2_text_document
+        - 0.0014200691729010955
+        - /data/train/uk/uk-train-optimized-3_text_document
+        - 0.0014200264746960579
+        - /data/train/uk/uk-train-optimized-6_text_document
+        - 0.0014188721743236877
+        - /data/train/uk/uk-train-optimized-1_text_document
+        - 0.0013372249466049326
+        - /data/train/uk/uk-train-optimized-7_text_document
+        - 0.001420420577974105
+        - /data/train/uk/uk-train-optimized-5_text_document
+        - 0.0026344620602251952
+        - /data/train/eu/eu-train-optimized-0_text_document
+        - 7.464652344885772e-05
+        - /data/train/ga/ga-train-optimized-0_text_document
+        - 0.003659880452850905
+        - /data/train/gl/gl-train-optimized-0_text_document
+        - 0.0013971820650393635
+        - /data/train/de/de-train-optimized-7_text_document
+        - 0.005897941083305142
+        - /data/train/de/de-train-optimized-3_text_document
+        - 0.005905774980623521
+        - /data/train/de/de-train-optimized-4_text_document
+        - 0.0058918616018796225
+        - /data/train/de/de-train-optimized-1_text_document
+        - 0.005894241765409724
+        - /data/train/de/de-train-optimized-6_text_document
+        - 0.005895409620689286
+        - /data/train/de/de-train-optimized-0_text_document
+        - 0.005905948582058704
+        - /data/train/de/de-train-optimized-2_text_document
+        - 0.005903768416492203
+        - /data/train/de/de-train-optimized-5_text_document
+      validation:
+        - 1.0
+        - /data/valid/valid_shuffled_text_document
+      test:
+        - 1.0
+        - /data/test/test_shuffled_text_document
