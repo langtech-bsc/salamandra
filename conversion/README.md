@@ -2,7 +2,7 @@
 
 Code for converting a NeMo checkpoint into the widely adopted HuggingFace format.
 
-## Prerquisites   
+## Prerequisites   
 
 Make sure that the following libraries are installed in your environment:
 ```
