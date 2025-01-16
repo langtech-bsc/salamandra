@@ -20,7 +20,7 @@ Make sure that the following libraries are installed in your environment:
 ## Input Arguments
 
 The scripts take the following arguments:
-- **`--model_path`**: Path to the NeMo model to be converted. This should point to the directory containing the model's `.nemo` file or (even better) a decompressed nemo directory.
+- **`--model_path`**: Path to a `.nemo` file or (even better) a decompressed nemo directory.
 - **`--output_path`**: Directory where the converted HuggingFace model will be saved.
 
 ## Usage Example
