@@ -4,13 +4,17 @@ Code for converting a NeMo checkpoint into the widely adopted HuggingFace format
 
 ## Prerequisites   
 
-Make sure that the following libraries are installed in your environment:
+Ensure the following libraries are installed in your environment:
 ```
    - torch
    - transformers
    - protobuf
    - sentencepiece
 ```
+System requirements:
+```
+   - Minimum RAM: 80 GB of RAM is required for the conversion process of the 7b model.  
+   - Disk Space: Sufficient storage to accommodate both the original and converted models is essential. If converting from a `.nemo` file, ensure at least 3x the original model size due to the decompression step.
 
 ## Files
 
